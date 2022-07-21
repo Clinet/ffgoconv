@@ -33,7 +33,9 @@ func NewFFmpeg(filepath string, args []string) (*FFmpeg, error) {
 	if filepath == "" {
 		return nil, ErrFFmpegFilepathEmpty
 	}
+	noStd := true
 	if len(args) == 0 {
+		noStd = false
 		args = []string{
 			"-hide_banner",
 			"-stats",
@@ -50,51 +52,43 @@ func NewFFmpeg(filepath string, args []string) (*FFmpeg, error) {
 	}
 	
 	ffmpeg := exec.Command("ffmpeg", args...)
-	
-	stdinPipe, err := ffmpeg.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	stdoutPipe, err := ffmpeg.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
+
 	stderrPipe, err := ffmpeg.StderrPipe()
 	if err != nil {
 		return nil, err
 	}
-	
-	err = ffmpeg.Start()
-	if err != nil {
-		stdoutData, _ := ioutil.ReadAll(stdoutPipe)
-		stderrData, _ := ioutil.ReadAll(stderrPipe)
-		
-		stdinPipe.Close()
-		stdoutPipe.Close()
-		stderrPipe.Close()
-		
-		err = fmt.Errorf("ffgoconv: FFmpeg: error starting process: {err: \"%v\", stdout: \"%v\", stderr: \"%v\"}", err, stdoutData, stderrData)
-		return nil, err
-	}
-
 	ff := &FFmpeg{
 		process: ffmpeg,
-		stdin: stdinPipe,
-		stdout: stdoutPipe,
 		stderr: stderrPipe,
 	}
-
-	go func() {
-		if err := ffmpeg.Wait(); err != nil {
-			stdoutData, _ := ioutil.ReadAll(ff.stdout)
-			stderrData, _ := ioutil.ReadAll(ff.stderr)
-
-			ff.err = fmt.Errorf("ffgoconv: FFmpeg: error starting process: {err: \"%v\", stdout: \"%v\", stderr: \"%v\", args: \"%v\"}", err, stdoutData, stderrData, args)
+	
+	if !noStd {
+		ff.stdin, err = ffmpeg.StdinPipe()
+		if err != nil {
+			return nil, err
 		}
-		ff.Close()
-	}()
+		ff.stdout, err = ffmpeg.StdoutPipe()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return ff, nil
+}
+
+// Run starts and waits on the FFmpeg process, and returns an exit error if any
+func (ff *FFmpeg) Run() error {
+	defer ff.Close()
+	if err := ff.process.Start(); err != nil {
+		ff.setError(fmt.Errorf("ffgoconv: FFmpeg: error starting process: %v", err))
+		return ff.Err()
+	}
+	stderrData, _ := ioutil.ReadAll(ff.stderr)
+	if err := ff.process.Wait(); err != nil {
+		ff.setError(fmt.Errorf("ffgoconv: FFmpeg: error running process: {err: \"%v\", stderr: \"%v\"}", err, stderrData))
+		return ff.Err()
+	}
+	return nil
 }
 
 // IsRunning returns whether or not the FFmpeg process is running, per the knowledge of ffgoconv.
@@ -108,8 +102,12 @@ func (ff *FFmpeg) Close() {
 		return
 	}
 	ff.process.Process.Kill()
-	ff.stdin.Close()
-	ff.stdout.Close()
+	if ff.stdin != nil {
+		ff.stdin.Close()
+	}
+	if ff.stdout != nil {
+		ff.stdout.Close()
+	}
 	ff.stderr.Close()
 	ff.closed = true
 }
