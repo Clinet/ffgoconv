@@ -76,19 +76,25 @@ func NewFFmpeg(filepath string, args []string) (*FFmpeg, error) {
 		err = fmt.Errorf("ffgoconv: FFmpeg: error starting process: {err: \"%v\", stdout: \"%v\", stderr: \"%v\"}", err, stdoutData, stderrData)
 		return nil, err
 	}
-	
-	go func() {
-		if err := ffmpeg.Wait(); err != nil {
-			fmt.Println("SERIOUS ERROR IN FFMPEG GOROUTINE: ", err)
-		}
-	}()
-	
-	return &FFmpeg{
+
+	ff := &FFmpeg{
 		process: ffmpeg,
 		stdin: stdinPipe,
 		stdout: stdoutPipe,
 		stderr: stderrPipe,
-	}, nil
+	}
+
+	go func() {
+		if err := ffmpeg.Wait(); err != nil {
+			stdoutData, _ := ioutil.ReadAll(ff.stdout)
+			stderrData, _ := ioutil.ReadAll(ff.stderr)
+
+			ff.err = fmt.Errorf("ffgoconv: FFmpeg: error starting process: {err: \"%v\", stdout: \"%v\", stderr: \"%v\", args: \"%v\"}", err, stdoutData, stderrData, args)
+		}
+		ff.Close()
+	}()
+
+	return ff, nil
 }
 
 // IsRunning returns whether or not the FFmpeg process is running, per the knowledge of ffgoconv.
